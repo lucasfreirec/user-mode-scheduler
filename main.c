@@ -1,56 +1,60 @@
 #include <stdio.h>
-#include "escalonador.h"
+#include "scheduler.h"
 
-void rotina_A() {
+void task_A(void) {
     for (int i = 1; i <= 4; i++) {
-        printf("Tarefa A [passo %d]\n", i);
+        printf("Task A [step %d]\n", i);
         yield();
     }
 }
 
-void rotina_B() {
+void task_B(void) {
     for (int i = 1; i <= 4; i++) {
-        printf("\t-> Tarefa B [passo %d]\n", i);
+        printf("\t-> Task B [step %d]\n", i);
         yield();
-        rotina_A();
+        task_A();
     }
 }
 
-void rotina_C() {
+void task_C(void) {
     for (int i = 1; i <= 4; i++) {
-        printf("\t\t--> Tarefa C [passo %d]\n", i);
-        yield();
-    }
-}
-
-void rotina_D() {
-    for (int i = 1; i <= 4; i++) {
-        printf("\t\t\t---> Tarefa D [passo %d]\n", i);
+        printf("\t\t--> Task C [step %d]\n", i);
         yield();
     }
 }
 
-void rotina_E() {
+void task_D(void) {
     for (int i = 1; i <= 4; i++) {
-        printf("\t\t\t\t----> Tarefa E [passo %d]\n", i);
+        printf("\t\t\t---> Task D [step %d]\n", i);
+        yield();
+    }
+}
+
+void task_E(void) {
+    for (int i = 1; i <= 4; i++) {
+        printf("\t\t\t\t----> Task E [step %d]\n", i);
         yield();
     }
 }
 
 int main(void) {
-    Escalonador meu_escalonador;
-    inicializar_escalonador(&meu_escalonador);
+    Scheduler my_scheduler;
 
-    printf("Criando 5 tarefas (A, B, C, D, E)...\n");
-    criar_tarefa(rotina_A);
-    criar_tarefa(rotina_B);
-    criar_tarefa(rotina_C);
-    criar_tarefa(rotina_D);
-    criar_tarefa(rotina_E);
+    initialize_scheduler(&my_scheduler);
 
-    printf("\n--- Iniciando Escalonador ---\n");
-    escalonador();
-    printf("--- Fim da Execução ---\n");
-    
+    printf("Creating 5 tasks (A, B, C, D, E)...\n");
+
+    create_task(task_A);
+    create_task(task_B);
+    create_task(task_C);
+    create_task(task_D);
+    create_task(task_E);
+
+    printf("\n--- Starting Scheduler ---\n");
+
+    run_scheduler();
+
+    printf("--- Execution Finished ---\n");
+
     return 0;
 }
