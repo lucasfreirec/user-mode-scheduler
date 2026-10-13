@@ -5,6 +5,85 @@
 
 static Scheduler *active_scheduler = NULL;
 
+/* Adds a READY task to the tail of the ready queue exactly once. */
+static SchedulerResult ready_queue_push(Scheduler *scheduler, Task *task)
+{
+    if (scheduler->ready_count >= SCHEDULER_MAX_TASKS) {
+        return SCHEDULER_ERROR_SYSTEM;
+    }
+
+    if (task->state != TASK_READY || task->in_ready_queue) {
+        return SCHEDULER_ERROR_INVALID_STATE;
+    }
+
+    scheduler->ready_queue[scheduler->ready_tail] = task;
+    scheduler->ready_tail =
+        (scheduler->ready_tail + 1) % SCHEDULER_MAX_TASKS;
+    scheduler->ready_count++;
+    task->in_ready_queue = 1;
+
+    return SCHEDULER_SUCCESS;
+}
+
+/* Removes and returns the task at the head of the ready queue. */
+static Task *ready_queue_pop(Scheduler *scheduler)
+{
+    if (scheduler->ready_count == 0) {
+        return NULL;
+    }
+
+    Task *task = scheduler->ready_queue[scheduler->ready_head];
+
+    scheduler->ready_queue[scheduler->ready_head] = NULL;
+    scheduler->ready_head =
+        (scheduler->ready_head + 1) % SCHEDULER_MAX_TASKS;
+    scheduler->ready_count--;
+    task->in_ready_queue = 0;
+
+    return task;
+}
+
+/* Removes a specific READY task, used when it is cancelled. */
+static SchedulerResult ready_queue_remove(Scheduler *scheduler, Task *task)
+{
+    if (!task->in_ready_queue) {
+        return SCHEDULER_ERROR_INVALID_STATE;
+    }
+
+    int position = -1;
+
+    for (int i = 0; i < scheduler->ready_count; i++) {
+        int index = (scheduler->ready_head + i) % SCHEDULER_MAX_TASKS;
+
+        if (scheduler->ready_queue[index] == task) {
+            position = i;
+            break;
+        }
+    }
+
+    if (position < 0) {
+        return SCHEDULER_ERROR_SYSTEM;
+    }
+
+    for (int i = position; i < scheduler->ready_count - 1; i++) {
+        int destination =
+            (scheduler->ready_head + i) % SCHEDULER_MAX_TASKS;
+        int source =
+            (scheduler->ready_head + i + 1) % SCHEDULER_MAX_TASKS;
+
+        scheduler->ready_queue[destination] = scheduler->ready_queue[source];
+    }
+
+    scheduler->ready_tail =
+        (scheduler->ready_tail + SCHEDULER_MAX_TASKS - 1)
+        % SCHEDULER_MAX_TASKS;
+    scheduler->ready_queue[scheduler->ready_tail] = NULL;
+    scheduler->ready_count--;
+    task->in_ready_queue = 0;
+
+    return SCHEDULER_SUCCESS;
+}
+
 /*
  * Releases the resources owned by a task.
  * The task context must no longer be executing when this is called.
@@ -25,35 +104,6 @@ static Task *find_task_by_id(Scheduler *scheduler, int task_id)
     for (int i = 0; i < scheduler->task_count; i++) {
         if (scheduler->tasks[i].id == task_id) {
             return &scheduler->tasks[i];
-        }
-    }
-
-    return NULL;
-}
-
-/*
- * Finds the next READY task using cooperative Round-Robin.
- */
-static Task *find_next_task(Scheduler *scheduler)
-{
-    if (scheduler->task_count == 0) {
-        return NULL;
-    }
-
-    int start = 0;
-
-    if (scheduler->current_task != NULL) {
-        int current_index =
-            (int)(scheduler->current_task - scheduler->tasks);
-
-        start = (current_index + 1) % scheduler->task_count;
-    }
-
-    for (int i = 0; i < scheduler->task_count; i++) {
-        int index = (start + i) % scheduler->task_count;
-
-        if (scheduler->tasks[index].state == TASK_READY) {
-            return &scheduler->tasks[index];
         }
     }
 
@@ -126,15 +176,17 @@ SchedulerResult scheduler_spawn(
 
     Task *task = &scheduler->tasks[scheduler->task_count];
 
+    memset(task, 0, sizeof(*task));
     task->id = scheduler->next_task_id;
     task->state = TASK_READY;
     task->routine = routine;
-    task->stack = NULL;
 
     /*
      * Capture a context that will be configured for this task.
      */
     if (getcontext(&task->context) == -1) {
+        task->state = TASK_UNUSED;
+        task->routine = NULL;
         return SCHEDULER_ERROR_SYSTEM;
     }
 
@@ -144,6 +196,8 @@ SchedulerResult scheduler_spawn(
     task->stack = malloc(TASK_STACK_SIZE);
 
     if (task->stack == NULL) {
+        task->state = TASK_UNUSED;
+        task->routine = NULL;
         return SCHEDULER_ERROR_OUT_OF_MEMORY;
     }
 
@@ -160,6 +214,13 @@ SchedulerResult scheduler_spawn(
      * Configure the task entry point.
      */
     makecontext(&task->context, task_wrapper, 0);
+
+    if (ready_queue_push(scheduler, task) != SCHEDULER_SUCCESS) {
+        release_task_stack(task);
+        task->state = TASK_UNUSED;
+        task->routine = NULL;
+        return SCHEDULER_ERROR_SYSTEM;
+    }
 
     *task_id = task->id;
 
@@ -195,6 +256,10 @@ SchedulerResult scheduler_cancel(
 
     if (task->state != TASK_READY) {
         return SCHEDULER_ERROR_INVALID_STATE;
+    }
+
+    if (ready_queue_remove(scheduler, task) != SCHEDULER_SUCCESS) {
+        return SCHEDULER_ERROR_SYSTEM;
     }
 
     task->state = TASK_CANCELLED;
@@ -252,14 +317,13 @@ SchedulerResult scheduler_run(Scheduler *scheduler)
     active_scheduler = scheduler;
 
     while (scheduler->active_tasks > 0) {
-        Task *next_task = find_next_task(scheduler);
+        Task *next_task = ready_queue_pop(scheduler);
 
         /*
-         * With only READY, RUNNING, FINISHED and CANCELLED states,
-         * active tasks should always have a READY task to run
-         * whenever the scheduler regains control.
+         * Every active task is either executing or represented once in
+         * the ready queue whenever the scheduler has control.
          */
-        if (next_task == NULL) {
+        if (next_task == NULL || next_task->state != TASK_READY) {
             active_scheduler = NULL;
             scheduler->current_task = NULL;
 
@@ -277,6 +341,7 @@ SchedulerResult scheduler_run(Scheduler *scheduler)
                 &next_task->context) == -1) {
 
             next_task->state = TASK_READY;
+            (void)ready_queue_push(scheduler, next_task);
             scheduler->current_task = NULL;
             active_scheduler = NULL;
 
@@ -290,6 +355,11 @@ SchedulerResult scheduler_run(Scheduler *scheduler)
         if (next_task->state == TASK_FINISHED) {
             release_task_stack(next_task);
             scheduler->active_tasks--;
+        } else if (next_task->state != TASK_READY) {
+            scheduler->current_task = NULL;
+            active_scheduler = NULL;
+
+            return SCHEDULER_ERROR_SYSTEM;
         }
     }
 
@@ -318,6 +388,11 @@ SchedulerResult task_yield(void)
 
     task->state = TASK_READY;
 
+    if (ready_queue_push(scheduler, task) != SCHEDULER_SUCCESS) {
+        task->state = TASK_RUNNING;
+        return SCHEDULER_ERROR_SYSTEM;
+    }
+
     /*
      * Save the task context and resume the scheduler context.
      */
@@ -325,6 +400,7 @@ SchedulerResult task_yield(void)
             &task->context,
             &scheduler->context) == -1) {
 
+        (void)ready_queue_remove(scheduler, task);
         task->state = TASK_RUNNING;
 
         return SCHEDULER_ERROR_SYSTEM;

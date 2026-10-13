@@ -1,16 +1,17 @@
-CC=gcc
+CC=gcc-16
 CFLAGS=-Wall -Wextra -std=c11 -g
+CPPFLAGS=-D_XOPEN_SOURCE=700
 
 all: main
 
 main: main.o scheduler.o
-	$(CC) $(CFLAGS) -o main main.o scheduler.o
+	$(CC) $(CFLAGS) -o $@ $^
 
 main.o: main.c scheduler.h
-	$(CC) $(CFLAGS) -c main.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $<
 
-escalonador.o: scheduler.c scheduler.h
-	$(CC) $(CFLAGS) -c scheduler.c
+scheduler.o: scheduler.c scheduler.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $<
 
 clean:
 	rm -f *.o main

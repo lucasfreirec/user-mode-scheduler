@@ -33,6 +33,7 @@ typedef struct {
     ucontext_t context;
     TaskRoutine routine;
     void *stack;
+    int in_ready_queue;
 } Task;
 
 typedef struct {
@@ -41,6 +42,12 @@ typedef struct {
     int task_count;
     int active_tasks;
     int next_task_id;
+
+    /* Circular FIFO queue used by the cooperative Round-Robin policy. */
+    Task *ready_queue[SCHEDULER_MAX_TASKS];
+    int ready_head;
+    int ready_tail;
+    int ready_count;
 
     Task *current_task;
     ucontext_t context;

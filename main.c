@@ -1,9 +1,21 @@
 #include <stdio.h>
+#include <string.h>
 #include "scheduler.h"
+
+static char execution_order[32];
+static size_t execution_count;
+
+static void record_execution(char task_name)
+{
+    if (execution_count < sizeof(execution_order) - 1) {
+        execution_order[execution_count++] = task_name;
+    }
+}
 
 static void task_A(void)
 {
     for (int i = 1; i <= 4; i++) {
+        record_execution('A');
         printf("Task A [step %d]\n", i);
         task_yield();
     }
@@ -12,6 +24,7 @@ static void task_A(void)
 static void task_B(void)
 {
     for (int i = 1; i <= 4; i++) {
+        record_execution('B');
         printf("\t-> Task B [step %d]\n", i);
         task_yield();
     }
@@ -20,6 +33,7 @@ static void task_B(void)
 static void task_C(void)
 {
     for (int i = 1; i <= 4; i++) {
+        record_execution('C');
         printf("\t\t--> Task C [step %d]\n", i);
         task_yield();
     }
@@ -28,6 +42,7 @@ static void task_C(void)
 static void task_D(void)
 {
     for (int i = 1; i <= 4; i++) {
+        record_execution('D');
         printf("\t\t\t---> Task D [step %d]\n", i);
         task_yield();
     }
@@ -36,6 +51,7 @@ static void task_D(void)
 static void task_E(void)
 {
     for (int i = 1; i <= 4; i++) {
+        record_execution('E');
         printf("\t\t\t\t----> Task E [step %d]\n", i);
         task_yield();
     }
@@ -178,6 +194,18 @@ int main(void)
         scheduler_destroy(&scheduler);
         return 1;
     }
+
+    if (strcmp(execution_order, "ABCDEABCDEABCDEABCDE") != 0 ||
+        scheduler.ready_count != 0) {
+        fprintf(stderr,
+                "Ready queue verification failed (sequence: %s, "
+                "remaining tasks: %d)\n",
+                execution_order, scheduler.ready_count);
+        scheduler_destroy(&scheduler);
+        return 1;
+    }
+
+    printf("Ready queue verification passed: %s\n", execution_order);
 
     printf("\n--- Final task states ---\n");
 
